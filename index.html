@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Scroll Animation</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: #08050a;
+        scroll-behavior: auto;
+      }
+
+      body {
+        min-height: 480vh;
+        margin: 0;
+        background: #08050a;
+      }
+
+      canvas {
+        position: fixed;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="sequence" role="img" aria-label="Scroll-controlled animation"></canvas>
+    <script>
+      const canvas = document.getElementById("sequence");
+      const context = canvas.getContext("2d", { alpha: false });
+      const frameCount = 300;
+      const frameCache = new Map();
+      const maxCachedFrames = 12;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      let targetFrame = 0;
+      let displayedFrame = 0;
+      let lastRequestedFrame = -1;
+      let animationId = 0;
+
+      function resizeCanvas() {
+        const scale = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(window.innerWidth * scale);
+        canvas.height = Math.round(window.innerHeight * scale);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        drawFrame();
+      }
+
+      function loadFrame(index) {
+        const frameIndex = Math.max(0, Math.min(frameCount - 1, index));
+        let image = frameCache.get(frameIndex);
+
+        if (!image) {
+          image = new Image();
+          image.decoding = "async";
+          image.loaded = false;
+          image.src = `images/ezgif-frame-${String(frameIndex + 1).padStart(3, "0")}.jpg`;
+          image.onload = () => {
+            image.loaded = true;
+            drawFrame();
+          };
+          image.onerror = () => {
+            frameCache.delete(frameIndex);
+          };
+          frameCache.set(frameIndex, image);
+        } else {
+          frameCache.delete(frameIndex);
+          frameCache.set(frameIndex, image);
+        }
+
+        while (frameCache.size > maxCachedFrames) {
+          frameCache.delete(frameCache.keys().next().value);
+        }
+
+        return image;
+      }
+
+      function drawImageCover(image, alpha = 1) {
+        if (!image || !image.loaded) return;
+
+        const scale = Math.max(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+        const width = image.naturalWidth * scale;
+        const height = image.naturalHeight * scale;
+        const left = (canvas.width - width) / 2;
+        const top = (canvas.height - height) / 2;
+
+        context.globalAlpha = alpha;
+        context.drawImage(image, left, top, width, height);
+        context.globalAlpha = 1;
+      }
+
+      function drawFrame() {
+        const frame = Math.max(0, Math.min(frameCount - 1, displayedFrame));
+        const firstIndex = Math.floor(frame);
+        const fraction = frame - firstIndex;
+        const first = loadFrame(firstIndex);
+        const second = firstIndex < frameCount - 1 ? loadFrame(firstIndex + 1) : null;
+
+        if (lastRequestedFrame !== firstIndex) {
+          lastRequestedFrame = firstIndex;
+          loadFrame(firstIndex + 2);
+        }
+
+        context.fillStyle = "#08050a";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        if (first.loaded) {
+          drawImageCover(first);
+          if (second && second.loaded && fraction > 0) {
+            drawImageCover(second, fraction);
+          }
+        } else if (second && second.loaded) {
+          drawImageCover(second);
+        } else {
+          for (const cached of frameCache.values()) {
+            if (cached.loaded) {
+              drawImageCover(cached);
+              break;
+            }
+          }
+        }
+      }
+
+      function updateTarget() {
+        const scrollableHeight = document.documentElement.scrollHeight - window.innerHeight;
+        const progress = scrollableHeight > 0 ? window.scrollY / scrollableHeight : 0;
+        targetFrame = Math.max(0, Math.min(frameCount - 1, progress * (frameCount - 1)));
+
+        if (!animationId) animationId = requestAnimationFrame(animate);
+      }
+
+      function animate() {
+        const distance = targetFrame - displayedFrame;
+        displayedFrame = reducedMotion.matches
+          ? targetFrame
+          : Math.abs(distance) < 0.1
+            ? targetFrame
+            : displayedFrame + distance * 0.16;
+
+        drawFrame();
+        if (displayedFrame !== targetFrame) {
+          animationId = requestAnimationFrame(animate);
+        } else {
+          animationId = 0;
+        }
+      }
+
+      window.addEventListener("scroll", updateTarget, { passive: true });
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+      loadFrame(0);
+      updateTarget();
+    </script>
+  </body>
+</html>
