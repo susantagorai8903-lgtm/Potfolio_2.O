@@ -58,6 +58,14 @@ textarea:focus-visible {
   display: block;
 }
 
+html.js .sequence-background {
+  visibility: hidden;
+}
+
+html.js .sequence-background.is-ready {
+  visibility: visible;
+}
+
 .background-shade {
   z-index: 1;
   background: rgba(8, 5, 10, 0.34);

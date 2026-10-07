@@ -55,460 +55,425 @@ const canvas = document.getElementById("sequence");
 if (!canvas) {
   console.error("Sequence canvas not found.");
 } else {
-
   const context = canvas.getContext("2d", {
     alpha: false,
-    desynchronized: true
+    desynchronized: true,
   });
 
-  // ------------------------------------------------
-  // Device detection
-  // ------------------------------------------------
-
-  const isMobile =
-    window.matchMedia("(max-width: 767px)").matches ||
-    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-
-  // Desktop = 300 frames
-  // Mobile  = 100 frames
-  const frameCount = isMobile ? 100 : 300;
-
-  const frameFolder = isMobile
-    ? "images/mobile"
-    : "images/desktop";
-
-  // Mobile needs much less memory.
-  const maxCachedFrames = isMobile ? 8 : 14;
-
-  // Mobile canvas should NOT render at 2x DPR.
-  const maxDPR = isMobile ? 1 : 2;
-
-  let frameCache = new Map();
-
-  let targetFrame = 0;
-  let displayedFrame = 0;
-
-  let animationId = 0;
-  let scrollUpdatePending = false;
-
-  let lastDrawnFrame = -1;
-  let lastPreloadedFrame = -1;
-
-
-  // ------------------------------------------------
-  // Frame path
-  // ------------------------------------------------
-
-  function getFramePath(index) {
-    const frameNumber = String(index + 1).padStart(3, "0");
-
-    return `${frameFolder}/ezgif-frame-${frameNumber}.jpg`;
-  }
-
-
-  // ------------------------------------------------
-  // Load frame
-  // ------------------------------------------------
-
-  function loadFrame(index) {
-
-    index = Math.max(
-      0,
-      Math.min(frameCount - 1, Math.round(index))
+  if (!context) {
+    console.error("Unable to create the sequence canvas context.");
+  } else {
+    const mobileViewport = window.matchMedia(
+      "(max-width: 767px), (pointer: coarse)"
     );
 
-    let image = frameCache.get(index);
+    let isMobile = mobileViewport.matches;
+    let frameCount = isMobile ? 100 : 300;
+    let frameFolder = isMobile ? "images/mobile" : "images/desktop";
+    let maxCachedFrames = isMobile ? 12 : 20;
+    let maxConcurrentLoads = isMobile ? 3 : 4;
+    let framesAhead = isMobile ? 4 : 8;
+    let framesBehind = isMobile ? 3 : 7;
+    let frameCache = new Map();
+    let activeLoads = 0;
+    let sequenceVersion = 0;
+    let cacheClock = 0;
+    let targetFrame = 0;
+    let lastTargetFrame = -1;
+    let lastDrawnFrame = -1;
+    let currentImage = null;
+    let currentImageIndex = -1;
+    let scrollUpdatePending = false;
+    let resizeUpdatePending = false;
+    let scrollDirection = 1;
 
-    if (image) {
-      // Refresh LRU position
-      frameCache.delete(index);
-      frameCache.set(index, image);
-
-      return image;
+    function getFramePath(index) {
+      const frameNumber = String(index + 1).padStart(3, "0");
+      return `${frameFolder}/ezgif-frame-${frameNumber}.jpg`;
     }
 
-    image = new Image();
-
-    image.decoding = "async";
-
-    image.src = getFramePath(index);
-
-    image.onload = () => {
-
-      // Only redraw if this is the frame currently needed.
-      if (
-        Math.abs(displayedFrame - index) < 2
-      ) {
-        drawFrame();
-      }
-    };
-
-    image.onerror = () => {
-      console.warn(
-        `Failed to load animation frame ${index + 1}`
-      );
-
-      frameCache.delete(index);
-    };
-
-    frameCache.set(index, image);
-
-
-    // Keep cache small
-    while (frameCache.size > maxCachedFrames) {
-
-      const oldestKey =
-        frameCache.keys().next().value;
-
-      frameCache.delete(oldestKey);
+    function touchFrame(entry) {
+      entry.lastUsed = ++cacheClock;
     }
 
-    return image;
-  }
+    function trimFrameCache() {
+      const keepDistance = framesAhead + framesBehind;
+      let loadedFrames = Array.from(frameCache.entries())
+        .filter(([, entry]) => entry.status === "loaded");
 
-
-  // ------------------------------------------------
-  // Preload nearby frames
-  // ------------------------------------------------
-
-  function preloadNearbyFrames(frame) {
-
-    const center = Math.round(frame);
-
-    if (center === lastPreloadedFrame) {
-      return;
-    }
-
-    lastPreloadedFrame = center;
-
-    // Number of frames loaded ahead/behind.
-    const range = isMobile ? 3 : 5;
-
-    for (
-      let offset = -range;
-      offset <= range;
-      offset++
-    ) {
-
-      const index = center + offset;
-
-      if (
-        index >= 0 &&
-        index < frameCount
-      ) {
-        loadFrame(index);
-      }
-    }
-  }
-
-
-  // ------------------------------------------------
-  // Draw image
-  // ------------------------------------------------
-
-  function drawImageCover(image) {
-
-    if (
-      !image ||
-      !image.naturalWidth ||
-      !image.naturalHeight
-    ) {
-      return false;
-    }
-
-    const scale = Math.max(
-      canvas.width / image.naturalWidth,
-      canvas.height / image.naturalHeight
-    );
-
-    const width =
-      image.naturalWidth * scale;
-
-    const height =
-      image.naturalHeight * scale;
-
-    const x =
-      (canvas.width - width) / 2;
-
-    const y =
-      (canvas.height - height) / 2;
-
-    context.drawImage(
-      image,
-      x,
-      y,
-      width,
-      height
-    );
-
-    return true;
-  }
-
-
-  // ------------------------------------------------
-  // Draw frame
-  // ------------------------------------------------
-
-  function drawFrame() {
-
-    const frame = Math.max(
-      0,
-      Math.min(
-        frameCount - 1,
-        displayedFrame
-      )
-    );
-
-    const frameIndex =
-      Math.round(frame);
-
-
-    // Avoid unnecessary redraws.
-    if (
-      frameIndex === lastDrawnFrame
-    ) {
-      return;
-    }
-
-    lastDrawnFrame = frameIndex;
-
-    const image =
-      loadFrame(frameIndex);
-
-
-    // Background
-    context.fillStyle = "#08050a";
-
-    context.fillRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
-
-    // Draw current frame
-    if (image?.complete && image.naturalWidth) {
-
-      drawImageCover(image);
-
-    } else {
-
-      // Try nearby cached frame while loading.
-      let fallback = null;
-
-      for (
-        const cached of frameCache.values()
-      ) {
-
+      for (const [index, entry] of frameCache) {
         if (
-          cached.complete &&
-          cached.naturalWidth
+          (entry.status === "queued" || entry.status === "error") &&
+          Math.abs(index - targetFrame) > keepDistance
         ) {
-          fallback = cached;
-          break;
+          frameCache.delete(index);
         }
       }
 
-      if (fallback) {
-        drawImageCover(fallback);
+      loadedFrames = Array.from(frameCache.entries())
+        .filter(([, entry]) => entry.status === "loaded")
+        .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+
+      while (loadedFrames.length > maxCachedFrames) {
+        const removableIndex = loadedFrames.findIndex(
+          ([index]) =>
+            index !== targetFrame && index !== currentImageIndex
+        );
+
+        if (removableIndex === -1) {
+          break;
+        }
+
+        const [[index]] = loadedFrames.splice(removableIndex, 1);
+        frameCache.delete(index);
       }
     }
 
-    preloadNearbyFrames(frameIndex);
-  }
+    function framePriority(index) {
+      const distance = Math.abs(index - targetFrame);
+      const isAhead = (index - targetFrame) * scrollDirection >= 0;
+      return distance + (isAhead ? 0 : framesAhead * 0.25);
+    }
 
+    function pumpFrameLoads() {
+      while (activeLoads < maxConcurrentLoads) {
+        let nextIndex = -1;
+        let bestPriority = Infinity;
 
-  // ------------------------------------------------
-  // Resize canvas
-  // ------------------------------------------------
+        for (const [index, entry] of frameCache) {
+          if (entry.status !== "queued") {
+            continue;
+          }
 
-  function resizeCanvas() {
+          const priority = framePriority(index);
+          if (priority < bestPriority) {
+            bestPriority = priority;
+            nextIndex = index;
+          }
+        }
 
-    const dpr = Math.min(
-      window.devicePixelRatio || 1,
-      maxDPR
-    );
+        if (nextIndex === -1) {
+          return;
+        }
 
-    canvas.width =
-      Math.round(
-        window.innerWidth * dpr
+        const entry = frameCache.get(nextIndex);
+        const image = new Image();
+        const requestVersion = sequenceVersion;
+
+        entry.status = "loading";
+        entry.image = image;
+        entry.attempts += 1;
+        touchFrame(entry);
+        activeLoads += 1;
+        image.decoding = "async";
+        if ("fetchPriority" in image) {
+          image.fetchPriority = "high";
+        }
+
+        image.onload = async () => {
+          if (
+            requestVersion !== sequenceVersion ||
+            frameCache.get(nextIndex) !== entry
+          ) {
+            return;
+          }
+
+          if (typeof image.decode === "function") {
+            try {
+              await image.decode();
+            } catch {
+              // Some browsers reject decode() even though the loaded image is drawable.
+            }
+          }
+
+          if (
+            requestVersion !== sequenceVersion ||
+            frameCache.get(nextIndex) !== entry
+          ) {
+            return;
+          }
+
+          activeLoads -= 1;
+
+          if (image.naturalWidth && image.naturalHeight) {
+            entry.status = "loaded";
+            touchFrame(entry);
+            drawBestAvailableFrame();
+          } else {
+            entry.status = "error";
+            entry.image = null;
+            entry.failedAt = Date.now();
+            console.warn(`Loaded animation frame ${nextIndex + 1} has no drawable image data.`);
+          }
+
+          trimFrameCache();
+          pumpFrameLoads();
+        };
+
+        image.onerror = () => {
+          if (
+            requestVersion !== sequenceVersion ||
+            frameCache.get(nextIndex) !== entry
+          ) {
+            return;
+          }
+
+          activeLoads -= 1;
+          entry.status = "error";
+          entry.image = null;
+          entry.failedAt = Date.now();
+          console.warn(`Failed to load animation frame ${nextIndex + 1}: ${getFramePath(nextIndex)}`);
+          trimFrameCache();
+          pumpFrameLoads();
+        };
+
+        image.src = getFramePath(nextIndex);
+      }
+    }
+
+    function ensureFrame(index) {
+      index = Math.max(0, Math.min(frameCount - 1, Math.round(index)));
+
+      let entry = frameCache.get(index);
+      if (entry) {
+        touchFrame(entry);
+
+        if (entry.status === "error") {
+          if (entry.attempts >= 2 || Date.now() - entry.failedAt < 1000) {
+            return;
+          }
+
+          entry.status = "queued";
+        } else {
+          return;
+        }
+      } else {
+        entry = {
+          status: "queued",
+          image: null,
+          attempts: 0,
+          failedAt: 0,
+          lastUsed: ++cacheClock,
+        };
+        frameCache.set(index, entry);
+      }
+
+      trimFrameCache();
+      pumpFrameLoads();
+    }
+
+    function drawImageCover(image) {
+      if (
+        !image ||
+        !image.complete ||
+        !image.naturalWidth ||
+        !image.naturalHeight ||
+        !canvas.width ||
+        !canvas.height
+      ) {
+        return false;
+      }
+
+      const scale = Math.max(
+        canvas.width / image.naturalWidth,
+        canvas.height / image.naturalHeight
       );
+      const width = image.naturalWidth * scale;
+      const height = image.naturalHeight * scale;
+      const x = (canvas.width - width) / 2;
+      const y = (canvas.height - height) / 2;
 
-    canvas.height =
-      Math.round(
-        window.innerHeight * dpr
+      context.drawImage(image, x, y, width, height);
+      canvas.classList.add("is-ready");
+      return true;
+    }
+
+    function renderFrame(index, image, force = false) {
+      if (
+        !force &&
+        index === lastDrawnFrame &&
+        image === currentImage
+      ) {
+        return;
+      }
+
+      if (!drawImageCover(image)) {
+        return;
+      }
+
+      currentImage = image;
+      currentImageIndex = index;
+      lastDrawnFrame = index;
+
+      const entry = frameCache.get(index);
+      if (entry) {
+        touchFrame(entry);
+      }
+    }
+
+    function drawBestAvailableFrame() {
+      const requestedEntry = frameCache.get(targetFrame);
+      if (requestedEntry?.status === "loaded") {
+        renderFrame(targetFrame, requestedEntry.image);
+        return;
+      }
+
+      if (currentImage) {
+        return;
+      }
+
+      let closestIndex = -1;
+      let closestImage = null;
+      let closestDistance = Infinity;
+
+      for (const [index, entry] of frameCache) {
+        if (entry.status !== "loaded") {
+          continue;
+        }
+
+        const distance = Math.abs(index - targetFrame);
+        if (distance < closestDistance) {
+          closestIndex = index;
+          closestImage = entry.image;
+          closestDistance = distance;
+        }
+      }
+
+      if (closestImage) {
+        renderFrame(closestIndex, closestImage);
+      }
+    }
+
+    function preloadNearbyFrames() {
+      ensureFrame(targetFrame);
+
+      for (let distance = 1; distance <= framesAhead; distance += 1) {
+        const index = targetFrame + distance * scrollDirection;
+        if (index >= 0 && index < frameCount) {
+          ensureFrame(index);
+        }
+      }
+
+      for (let distance = 1; distance <= framesBehind; distance += 1) {
+        const index = targetFrame - distance * scrollDirection;
+        if (index >= 0 && index < frameCount) {
+          ensureFrame(index);
+        }
+      }
+
+      trimFrameCache();
+      pumpFrameLoads();
+    }
+
+    function resizeCanvas() {
+      const dpr = Math.min(
+        window.devicePixelRatio || 1,
+        isMobile ? 1 : 2
       );
+      const width = Math.round(window.innerWidth * dpr);
+      const height = Math.round(window.innerHeight * dpr);
 
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
 
-    context.imageSmoothingEnabled = true;
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = isMobile ? "medium" : "high";
 
-    // Mobile: faster
-    // Desktop: higher quality
-    context.imageSmoothingQuality =
-      isMobile ? "medium" : "high";
+      if (currentImage) {
+        renderFrame(currentImageIndex, currentImage, true);
+      }
+    }
 
-    lastDrawnFrame = -1;
-
-    drawFrame();
-  }
-
-
-  // ------------------------------------------------
-  // Scroll → target frame
-  // ------------------------------------------------
-
-  function updateScrollPosition() {
-
-    const scrollableHeight =
-      document.documentElement.scrollHeight -
-      window.innerHeight;
-
-    const progress =
-      scrollableHeight > 0
+    function updateScrollPosition() {
+      const scrollableHeight =
+        document.documentElement.scrollHeight - window.innerHeight;
+      const progress = scrollableHeight > 0
         ? window.scrollY / scrollableHeight
         : 0;
+      const clampedProgress = Math.max(0, Math.min(1, progress));
+      const nextFrame = Math.round(clampedProgress * (frameCount - 1));
 
-    const clampedProgress =
-      Math.max(
-        0,
-        Math.min(1, progress)
+      document.documentElement.style.setProperty(
+        "--scroll-progress",
+        String(clampedProgress)
       );
 
+      if (nextFrame !== targetFrame) {
+        if (lastTargetFrame >= 0 && nextFrame !== lastTargetFrame) {
+          scrollDirection = nextFrame > lastTargetFrame ? 1 : -1;
+        }
 
-    // CSS scroll progress
-    document.documentElement.style.setProperty(
-      "--scroll-progress",
-      String(clampedProgress)
-    );
+        lastTargetFrame = nextFrame;
+        targetFrame = nextFrame;
+        drawBestAvailableFrame();
+        preloadNearbyFrames();
+      } else {
+        ensureFrame(targetFrame);
+      }
 
-
-    // Convert scroll percentage → frame
-    targetFrame =
-      clampedProgress *
-      (frameCount - 1);
-
-
-    if (!animationId) {
-
-      animationId =
-        window.requestAnimationFrame(
-          animate
-        );
+      scrollUpdatePending = false;
     }
 
-    scrollUpdatePending = false;
+    function requestProgressUpdate() {
+      if (scrollUpdatePending) {
+        return;
+      }
+
+      scrollUpdatePending = true;
+      window.requestAnimationFrame(updateScrollPosition);
+    }
+
+    function updateDeviceProfile() {
+      const nextIsMobile = mobileViewport.matches;
+      if (nextIsMobile === isMobile) {
+        return;
+      }
+
+      isMobile = nextIsMobile;
+      frameCount = isMobile ? 100 : 300;
+      frameFolder = isMobile ? "images/mobile" : "images/desktop";
+      maxCachedFrames = isMobile ? 12 : 20;
+      maxConcurrentLoads = isMobile ? 3 : 4;
+      framesAhead = isMobile ? 4 : 8;
+      framesBehind = isMobile ? 3 : 7;
+      sequenceVersion += 1;
+      activeLoads = 0;
+      frameCache.clear();
+      lastDrawnFrame = -1;
+      lastTargetFrame = -1;
+    }
+
+    function requestResizeUpdate() {
+      if (resizeUpdatePending) {
+        return;
+      }
+
+      resizeUpdatePending = true;
+      window.requestAnimationFrame(() => {
+        updateDeviceProfile();
+        resizeCanvas();
+        resizeUpdatePending = false;
+        requestProgressUpdate();
+      });
+    }
+
+    window.addEventListener("scroll", requestProgressUpdate, {
+      passive: true,
+    });
+    window.addEventListener("resize", requestResizeUpdate, {
+      passive: true,
+    });
+    window.addEventListener("orientationchange", requestResizeUpdate, {
+      passive: true,
+    });
+
+    resizeCanvas();
+    ensureFrame(0);
+    updateScrollPosition();
+    preloadNearbyFrames();
   }
-
-
-  // ------------------------------------------------
-  // Scroll listener
-  // ------------------------------------------------
-
-  function requestProgressUpdate() {
-
-    if (scrollUpdatePending) {
-      return;
-    }
-
-    scrollUpdatePending = true;
-
-    window.requestAnimationFrame(
-      updateScrollPosition
-    );
-  }
-
-
-  // ------------------------------------------------
-  // Smooth animation
-  // ------------------------------------------------
-
-  function animate() {
-
-    const distance =
-      targetFrame -
-      displayedFrame;
-
-
-    // Mobile responds slightly faster.
-    const easing =
-      isMobile ? 0.22 : 0.16;
-
-
-    if (
-      prefersReducedMotion.matches ||
-      Math.abs(distance) < 0.05
-    ) {
-
-      displayedFrame =
-        targetFrame;
-
-    } else {
-
-      displayedFrame +=
-        distance * easing;
-    }
-
-
-    drawFrame();
-
-
-    if (
-      Math.abs(
-        targetFrame -
-        displayedFrame
-      ) > 0.05
-    ) {
-
-      animationId =
-        window.requestAnimationFrame(
-          animate
-        );
-
-    } else {
-
-      displayedFrame =
-        targetFrame;
-
-      animationId = 0;
-
-      drawFrame();
-    }
-  }
-
-
-  // ------------------------------------------------
-  // Events
-  // ------------------------------------------------
-
-  window.addEventListener(
-    "scroll",
-    requestProgressUpdate,
-    {
-      passive: true
-    }
-  );
-
-  window.addEventListener(
-    "resize",
-    () => {
-      resizeCanvas();
-      requestProgressUpdate();
-    }
-  );
-
-
-  // ------------------------------------------------
-  // Initial setup
-  // ------------------------------------------------
-
-  resizeCanvas();
-
-  loadFrame(0);
-
-  updateScrollPosition();
 }
 
 
