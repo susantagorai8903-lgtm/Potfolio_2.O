@@ -485,36 +485,96 @@ const contactForm =
   document.getElementById("contact-form");
 
 if (contactForm) {
+  const contactName = contactForm.querySelector("#contact-name");
+  const contactEmail = contactForm.querySelector("#contact-email");
+  const contactMessage = contactForm.querySelector("#contact-message");
+  const submitButton = contactForm.querySelector('button[type="submit"]');
+  const formStatus = document.getElementById("contact-form-status");
+  const emailJsPublicKey = "Bao767YVatAxo5DCc";
+  const emailJsServiceId = "susanta_portfolio";
+  const emailJsTemplateId = "template_q1hbxhz";
+  let emailJsReady = false;
+  let isSubmitting = false;
+  const originalButtonText = submitButton.textContent;
 
-  contactForm.addEventListener(
-    "submit",
-    (event) => {
-
-      event.preventDefault();
-
-      const form =
-        new FormData(
-          event.currentTarget
-        );
-
-      const subject =
-        encodeURIComponent(
-          `Portfolio enquiry from ${form.get("name")}`
-        );
-
-      const message = [
-        `Name: ${form.get("name")}`,
-        `Email: ${form.get("email")}`,
-        `Phone: ${
-          form.get("phone") ||
-          "Not provided"
-        }`,
-        "",
-        form.get("message")
-      ].join("\n");
-
-      window.location.href =
-        `mailto:susantagorai@gmail.com?subject=${subject}&body=${encodeURIComponent(message)}`;
+  if (window.emailjs) {
+    try {
+      window.emailjs.init(emailJsPublicKey);
+      emailJsReady = true;
+    } catch (error) {
+      console.error("EmailJS initialization failed.", error);
     }
-  );
+  } else {
+    console.error("EmailJS SDK is unavailable.");
+  }
+
+  function showFormStatus(message, isError = false) {
+    formStatus.textContent = message;
+    formStatus.classList.toggle("is-error", isError);
+    formStatus.classList.toggle("is-success", !isError && message.length > 0);
+  }
+
+  contactForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (isSubmitting) {
+      return;
+    }
+
+    const name = contactName.value.trim();
+    const email = contactEmail.value.trim();
+    const message = contactMessage.value.trim();
+
+    if (!name) {
+      showFormStatus("Please enter your name.", true);
+      contactName.focus();
+      return;
+    }
+
+    if (!email) {
+      showFormStatus("Please enter your email address.", true);
+      contactEmail.focus();
+      return;
+    }
+
+    contactEmail.value = email;
+    if (!contactEmail.checkValidity()) {
+      showFormStatus("Please enter a valid email address.", true);
+      contactEmail.focus();
+      return;
+    }
+
+    if (!message) {
+      showFormStatus("Please enter a message.", true);
+      contactMessage.focus();
+      return;
+    }
+
+    if (!emailJsReady || !window.emailjs) {
+      showFormStatus("Failed to send message. Please try again.", true);
+      return;
+    }
+
+    isSubmitting = true;
+    submitButton.disabled = true;
+    submitButton.textContent = "Sending...";
+    showFormStatus("");
+
+    try {
+      await window.emailjs.sendForm(
+        emailJsServiceId,
+        emailJsTemplateId,
+        contactForm
+      );
+      contactForm.reset();
+      showFormStatus("Message sent successfully!");
+    } catch (error) {
+      console.error("Contact form submission failed.", error);
+      showFormStatus("Failed to send message. Please try again.", true);
+    } finally {
+      isSubmitting = false;
+      submitButton.disabled = false;
+      submitButton.textContent = originalButtonText;
+    }
+  });
 }

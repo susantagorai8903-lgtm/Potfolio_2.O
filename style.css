@@ -370,6 +370,22 @@ main,
   cursor: pointer;
 }
 
+.contact-form-status {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.contact-form-status.is-error {
+  color: #ff8b8b;
+}
+
+.contact-form .button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .contact-details {
   display: grid;
   align-content: start;
