@@ -1,13 +1,13 @@
 document.documentElement.classList.add("js");
 
-/* =========================================================
-   REVEAL ANIMATIONS
-========================================================= */
-
 const revealElements = document.querySelectorAll(".reveal");
 const prefersReducedMotion = window.matchMedia(
   "(prefers-reduced-motion: reduce)"
 );
+
+// --------------------------------------------------
+// Reveal animations
+// --------------------------------------------------
 
 if ("IntersectionObserver" in window && !prefersReducedMotion.matches) {
   const revealObserver = new IntersectionObserver(
@@ -35,9 +35,9 @@ if ("IntersectionObserver" in window && !prefersReducedMotion.matches) {
 }
 
 
-/* =========================================================
-   CURRENT YEAR
-========================================================= */
+// --------------------------------------------------
+// Current year
+// --------------------------------------------------
 
 const year = document.getElementById("current-year");
 
@@ -46,168 +46,173 @@ if (year) {
 }
 
 
-/* =========================================================
-   CANVAS SEQUENCE ANIMATION
-========================================================= */
+// --------------------------------------------------
+// Canvas
+// --------------------------------------------------
 
 const canvas = document.getElementById("sequence");
 
-if (canvas) {
+if (!canvas) {
+  console.error("Sequence canvas not found.");
+} else {
+
   const context = canvas.getContext("2d", {
     alpha: false,
-    desynchronized: true,
+    desynchronized: true
   });
 
-  /* -------------------------------------------------------
-     DEVICE DETECTION
-  ------------------------------------------------------- */
+  // ------------------------------------------------
+  // Device detection
+  // ------------------------------------------------
 
   const isMobile =
-    window.matchMedia("(max-width: 768px)").matches;
+    window.matchMedia("(max-width: 767px)").matches ||
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
-  /*
-    Desktop:
-      300 frames
+  // Desktop = 300 frames
+  // Mobile  = 100 frames
+  const frameCount = isMobile ? 100 : 300;
 
-    Mobile:
-      Every 3rd frame
-      300 / 3 = approximately 100 frames
+  const frameFolder = isMobile
+    ? "images/mobile"
+    : "images/desktop";
 
-    This dramatically reduces image requests and memory usage.
-  */
+  // Mobile needs much less memory.
+  const maxCachedFrames = isMobile ? 8 : 14;
 
-  const TOTAL_SOURCE_FRAMES = 300;
+  // Mobile canvas should NOT render at 2x DPR.
+  const maxDPR = isMobile ? 1 : 2;
 
-  const FRAME_STEP = isMobile ? 3 : 1;
-
-  const frameCount = Math.ceil(
-    TOTAL_SOURCE_FRAMES / FRAME_STEP
-  );
-
-  /*
-    Cache size
-
-    Desktop:
-      Keep more frames because desktop devices usually
-      have more memory and processing power.
-
-    Mobile:
-      Keep fewer frames to reduce memory pressure.
-  */
-
-  const maxCachedFrames = isMobile ? 6 : 12;
-
-  const frameCache = new Map();
+  let frameCache = new Map();
 
   let targetFrame = 0;
   let displayedFrame = 0;
 
-  let lastDrawnFrame = -1;
-  let lastRequestedFrame = -1;
-
   let animationId = 0;
-  let progressUpdatePending = false;
-  let resizePending = false;
+  let scrollUpdatePending = false;
+
+  let lastDrawnFrame = -1;
+  let lastPreloadedFrame = -1;
 
 
-/* =========================================================
-   FRAME INDEX
-========================================================= */
+  // ------------------------------------------------
+  // Frame path
+  // ------------------------------------------------
 
-  function getSourceFrameIndex(index) {
-    const safeIndex = Math.max(
-      0,
-      Math.min(frameCount - 1, index)
-    );
+  function getFramePath(index) {
+    const frameNumber = String(index + 1).padStart(3, "0");
 
-    return Math.min(
-      TOTAL_SOURCE_FRAMES - 1,
-      safeIndex * FRAME_STEP
-    );
+    return `${frameFolder}/ezgif-frame-${frameNumber}.jpg`;
   }
 
 
-/* =========================================================
-   LOAD FRAME
-========================================================= */
+  // ------------------------------------------------
+  // Load frame
+  // ------------------------------------------------
 
   function loadFrame(index) {
-    const frameIndex = Math.max(
+
+    index = Math.max(
       0,
       Math.min(frameCount - 1, Math.round(index))
     );
 
-    let image = frameCache.get(frameIndex);
+    let image = frameCache.get(index);
 
     if (image) {
-      /*
-        Move recently used frame to the end of the cache.
-      */
-
-      frameCache.delete(frameIndex);
-      frameCache.set(frameIndex, image);
+      // Refresh LRU position
+      frameCache.delete(index);
+      frameCache.set(index, image);
 
       return image;
     }
 
-    const sourceIndex = getSourceFrameIndex(frameIndex);
-
     image = new Image();
-
-    /*
-      Async decoding helps prevent image decoding
-      from blocking the main thread as much as possible.
-    */
 
     image.decoding = "async";
 
-    image.src =
-      `images/ezgif-frame-${String(sourceIndex + 1).padStart(3, "0")}.jpg`;
+    image.src = getFramePath(index);
 
     image.onload = () => {
-      /*
-        Only redraw if this is still the frame
-        we're interested in.
-      */
 
+      // Only redraw if this is the frame currently needed.
       if (
-        Math.abs(displayedFrame - frameIndex) < 2 ||
-        lastDrawnFrame === frameIndex
+        Math.abs(displayedFrame - index) < 2
       ) {
-        drawFrame(true);
+        drawFrame();
       }
     };
 
     image.onerror = () => {
-      frameCache.delete(frameIndex);
+      console.warn(
+        `Failed to load animation frame ${index + 1}`
+      );
+
+      frameCache.delete(index);
     };
 
-    frameCache.set(frameIndex, image);
+    frameCache.set(index, image);
 
-    /*
-      Remove oldest frames from cache.
-    */
 
+    // Keep cache small
     while (frameCache.size > maxCachedFrames) {
-      const oldestKey = frameCache.keys().next().value;
 
-      if (oldestKey !== undefined) {
-        frameCache.delete(oldestKey);
-      } else {
-        break;
-      }
+      const oldestKey =
+        frameCache.keys().next().value;
+
+      frameCache.delete(oldestKey);
     }
 
     return image;
   }
 
 
-/* =========================================================
-   DRAW IMAGE
-========================================================= */
+  // ------------------------------------------------
+  // Preload nearby frames
+  // ------------------------------------------------
 
-  function drawImageCover(image, alpha = 1) {
-    if (!image || !image.naturalWidth) {
+  function preloadNearbyFrames(frame) {
+
+    const center = Math.round(frame);
+
+    if (center === lastPreloadedFrame) {
+      return;
+    }
+
+    lastPreloadedFrame = center;
+
+    // Number of frames loaded ahead/behind.
+    const range = isMobile ? 3 : 5;
+
+    for (
+      let offset = -range;
+      offset <= range;
+      offset++
+    ) {
+
+      const index = center + offset;
+
+      if (
+        index >= 0 &&
+        index < frameCount
+      ) {
+        loadFrame(index);
+      }
+    }
+  }
+
+
+  // ------------------------------------------------
+  // Draw image
+  // ------------------------------------------------
+
+  function drawImageCover(image) {
+
+    if (
+      !image ||
+      !image.naturalWidth ||
+      !image.naturalHeight
+    ) {
       return false;
     }
 
@@ -216,109 +221,62 @@ if (canvas) {
       canvas.height / image.naturalHeight
     );
 
-    const width = image.naturalWidth * scale;
-    const height = image.naturalHeight * scale;
+    const width =
+      image.naturalWidth * scale;
 
-    context.globalAlpha = alpha;
+    const height =
+      image.naturalHeight * scale;
+
+    const x =
+      (canvas.width - width) / 2;
+
+    const y =
+      (canvas.height - height) / 2;
 
     context.drawImage(
       image,
-      (canvas.width - width) / 2,
-      (canvas.height - height) / 2,
+      x,
+      y,
       width,
       height
     );
-
-    context.globalAlpha = 1;
 
     return true;
   }
 
 
-/* =========================================================
-   DRAW CURRENT FRAME
-========================================================= */
+  // ------------------------------------------------
+  // Draw frame
+  // ------------------------------------------------
 
-  function drawFrame(force = false) {
-    let frame;
+  function drawFrame() {
 
-    /*
-      Mobile:
-        Use integer frames only.
-
-      Desktop:
-        Allow fractional frames for smoother interpolation.
-    */
-
-    if (isMobile) {
-      frame = Math.round(displayedFrame);
-    } else {
-      frame = displayedFrame;
-    }
-
-    const firstIndex = Math.max(
+    const frame = Math.max(
       0,
-      Math.min(frameCount - 1, Math.floor(frame))
+      Math.min(
+        frameCount - 1,
+        displayedFrame
+      )
     );
 
-    /*
-      Don't redraw the exact same frame unnecessarily.
-    */
+    const frameIndex =
+      Math.round(frame);
 
-    if (!force && isMobile && firstIndex === lastDrawnFrame) {
+
+    // Avoid unnecessary redraws.
+    if (
+      frameIndex === lastDrawnFrame
+    ) {
       return;
     }
 
-    lastDrawnFrame = firstIndex;
+    lastDrawnFrame = frameIndex;
 
-    /*
-      Load the current frame.
-    */
+    const image =
+      loadFrame(frameIndex);
 
-    const first = loadFrame(firstIndex);
 
-    /*
-      Desktop can blend between two frames.
-
-      Mobile intentionally avoids blending because
-      blending two large images on every scroll frame
-      is expensive.
-    */
-
-    let second = null;
-    let fraction = 0;
-
-    if (!isMobile && firstIndex < frameCount - 1) {
-      second = loadFrame(firstIndex + 1);
-      fraction = frame - firstIndex;
-    }
-
-    /*
-      Prefetch upcoming frames.
-
-      Desktop:
-        Load 2 frames ahead.
-
-      Mobile:
-        Load only 1 frame ahead.
-    */
-
-    if (lastRequestedFrame !== firstIndex) {
-      lastRequestedFrame = firstIndex;
-
-      const prefetchCount = isMobile ? 1 : 2;
-
-      for (let i = 1; i <= prefetchCount; i++) {
-        if (firstIndex + i < frameCount) {
-          loadFrame(firstIndex + i);
-        }
-      }
-    }
-
-    /*
-      Clear canvas.
-    */
-
+    // Background
     context.fillStyle = "#08050a";
 
     context.fillRect(
@@ -328,92 +286,82 @@ if (canvas) {
       canvas.height
     );
 
-    /*
-      Draw current frame.
-    */
 
-    if (first && first.naturalWidth) {
-      drawImageCover(first);
+    // Draw current frame
+    if (image?.complete && image.naturalWidth) {
 
-      /*
-        Desktop frame interpolation.
-      */
+      drawImageCover(image);
 
-      if (
-        !isMobile &&
-        second &&
-        second.naturalWidth &&
-        fraction > 0
-      ) {
-        drawImageCover(second, fraction);
-      }
-    } else if (second && second.naturalWidth) {
-      drawImageCover(second);
     } else {
-      /*
-        If the requested frame hasn't loaded yet,
-        display the most recently cached frame.
-      */
 
-      for (const cached of frameCache.values()) {
-        if (cached && cached.naturalWidth) {
-          drawImageCover(cached);
+      // Try nearby cached frame while loading.
+      let fallback = null;
+
+      for (
+        const cached of frameCache.values()
+      ) {
+
+        if (
+          cached.complete &&
+          cached.naturalWidth
+        ) {
+          fallback = cached;
           break;
         }
       }
+
+      if (fallback) {
+        drawImageCover(fallback);
+      }
     }
+
+    preloadNearbyFrames(frameIndex);
   }
 
 
-/* =========================================================
-   CANVAS RESIZE
-========================================================= */
+  // ------------------------------------------------
+  // Resize canvas
+  // ------------------------------------------------
 
   function resizeCanvas() {
-    /*
-      Desktop:
-        Maximum DPR = 2
 
-      Mobile:
-        DPR = 1
-
-      This is one of the biggest mobile performance
-      improvements.
-    */
-
-    const devicePixelRatio = window.devicePixelRatio || 1;
-
-    const scale = isMobile
-      ? 1
-      : Math.min(devicePixelRatio, 2);
-
-    canvas.width = Math.round(
-      window.innerWidth * scale
+    const dpr = Math.min(
+      window.devicePixelRatio || 1,
+      maxDPR
     );
 
-    canvas.height = Math.round(
-      window.innerHeight * scale
-    );
+    canvas.width =
+      Math.round(
+        window.innerWidth * dpr
+      );
 
-    /*
-      Lower-quality image smoothing on mobile
-      saves GPU work.
-    */
+    canvas.height =
+      Math.round(
+        window.innerHeight * dpr
+      );
+
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
 
     context.imageSmoothingEnabled = true;
 
+    // Mobile: faster
+    // Desktop: higher quality
     context.imageSmoothingQuality =
       isMobile ? "medium" : "high";
 
-    drawFrame(true);
+    lastDrawnFrame = -1;
+
+    drawFrame();
   }
 
 
-/* =========================================================
-   UPDATE SCROLL POSITION
-========================================================= */
+  // ------------------------------------------------
+  // Scroll → target frame
+  // ------------------------------------------------
 
   function updateScrollPosition() {
+
     const scrollableHeight =
       document.documentElement.scrollHeight -
       window.innerHeight;
@@ -423,256 +371,185 @@ if (canvas) {
         ? window.scrollY / scrollableHeight
         : 0;
 
-    const clampedProgress = Math.max(
-      0,
-      Math.min(1, progress)
-    );
+    const clampedProgress =
+      Math.max(
+        0,
+        Math.min(1, progress)
+      );
 
-    /*
-      Update top scroll progress bar.
-    */
 
+    // CSS scroll progress
     document.documentElement.style.setProperty(
       "--scroll-progress",
       String(clampedProgress)
     );
 
-    /*
-      Convert page scroll into animation frame.
-    */
 
+    // Convert scroll percentage → frame
     targetFrame =
-      clampedProgress * (frameCount - 1);
+      clampedProgress *
+      (frameCount - 1);
 
-    /*
-      Start animation loop if necessary.
-    */
 
     if (!animationId) {
+
       animationId =
-        window.requestAnimationFrame(animate);
+        window.requestAnimationFrame(
+          animate
+        );
     }
 
-    progressUpdatePending = false;
+    scrollUpdatePending = false;
   }
 
 
-/* =========================================================
-   SCROLL HANDLER
-========================================================= */
+  // ------------------------------------------------
+  // Scroll listener
+  // ------------------------------------------------
 
   function requestProgressUpdate() {
-    if (!progressUpdatePending) {
-      progressUpdatePending = true;
 
-      window.requestAnimationFrame(
-        updateScrollPosition
-      );
+    if (scrollUpdatePending) {
+      return;
     }
+
+    scrollUpdatePending = true;
+
+    window.requestAnimationFrame(
+      updateScrollPosition
+    );
   }
 
 
-/* =========================================================
-   ANIMATION LOOP
-========================================================= */
+  // ------------------------------------------------
+  // Smooth animation
+  // ------------------------------------------------
 
   function animate() {
+
     const distance =
-      targetFrame - displayedFrame;
+      targetFrame -
+      displayedFrame;
 
-    /*
-      Mobile:
-        Move faster toward target.
 
-      Desktop:
-        Smooth interpolation.
-    */
+    // Mobile responds slightly faster.
+    const easing =
+      isMobile ? 0.22 : 0.16;
 
-    if (prefersReducedMotion.matches) {
-      displayedFrame = targetFrame;
-    } else if (isMobile) {
-      /*
-        Mobile does not need heavy smoothing.
-        Faster response = less unnecessary rendering.
-      */
 
-      displayedFrame += distance * 0.35;
+    if (
+      prefersReducedMotion.matches ||
+      Math.abs(distance) < 0.05
+    ) {
 
-      if (Math.abs(distance) < 0.25) {
-        displayedFrame = targetFrame;
-      }
+      displayedFrame =
+        targetFrame;
+
     } else {
-      /*
-        Desktop gets the smoother cinematic movement.
-      */
 
-      displayedFrame += distance * 0.16;
-
-      if (Math.abs(distance) < 0.1) {
-        displayedFrame = targetFrame;
-      }
+      displayedFrame +=
+        distance * easing;
     }
 
-    /*
-      Draw only when needed.
-    */
 
-    const roundedFrame = Math.round(displayedFrame);
+    drawFrame();
+
 
     if (
-      isMobile
-        ? roundedFrame !== lastDrawnFrame
-        : true
+      Math.abs(
+        targetFrame -
+        displayedFrame
+      ) > 0.05
     ) {
-      drawFrame();
-    }
 
-    /*
-      Continue animation while there is still
-      distance to cover.
-    */
-
-    if (
-      Math.abs(targetFrame - displayedFrame) > 0.05
-    ) {
       animationId =
-        window.requestAnimationFrame(animate);
+        window.requestAnimationFrame(
+          animate
+        );
+
     } else {
-      displayedFrame = targetFrame;
 
-      /*
-        Make sure final frame is drawn.
-      */
-
-      drawFrame();
+      displayedFrame =
+        targetFrame;
 
       animationId = 0;
+
+      drawFrame();
     }
   }
 
 
-/* =========================================================
-   EVENT LISTENERS
-========================================================= */
-
-  /*
-    Passive scroll listener allows the browser
-    to scroll without waiting for JavaScript.
-  */
+  // ------------------------------------------------
+  // Events
+  // ------------------------------------------------
 
   window.addEventListener(
     "scroll",
     requestProgressUpdate,
     {
-      passive: true,
+      passive: true
     }
   );
-
-
-  /*
-    Resize is throttled through requestAnimationFrame.
-  */
 
   window.addEventListener(
     "resize",
     () => {
-      if (!resizePending) {
-        resizePending = true;
-
-        window.requestAnimationFrame(() => {
-          resizeCanvas();
-
-          resizePending = false;
-
-          requestProgressUpdate();
-        });
-      }
-    },
-    {
-      passive: true,
+      resizeCanvas();
+      requestProgressUpdate();
     }
   );
 
 
-/* =========================================================
-   INITIALIZE
-========================================================= */
+  // ------------------------------------------------
+  // Initial setup
+  // ------------------------------------------------
 
   resizeCanvas();
 
-  /*
-    Load the first frame immediately.
-  */
-
   loadFrame(0);
-
-  /*
-    Prefetch the first few frames.
-  */
-
-  const initialFrames = isMobile ? 2 : 4;
-
-  for (
-    let i = 0;
-    i < initialFrames && i < frameCount;
-    i++
-  ) {
-    loadFrame(i);
-  }
-
-  /*
-    Set initial scroll position.
-  */
 
   updateScrollPosition();
 }
 
 
-/* =========================================================
-   CONTACT FORM
-========================================================= */
+// --------------------------------------------------
+// Contact form
+// --------------------------------------------------
 
 const contactForm =
   document.getElementById("contact-form");
 
 if (contactForm) {
+
   contactForm.addEventListener(
     "submit",
     (event) => {
+
       event.preventDefault();
 
       const form =
-        new FormData(event.currentTarget);
+        new FormData(
+          event.currentTarget
+        );
 
-      const name =
-        form.get("name") || "";
+      const subject =
+        encodeURIComponent(
+          `Portfolio enquiry from ${form.get("name")}`
+        );
 
-      const email =
-        form.get("email") || "";
-
-      const phone =
-        form.get("phone") ||
-        "Not provided";
-
-      const message =
-        form.get("message") || "";
-
-      const subject = encodeURIComponent(
-        `Portfolio enquiry from ${name}`
-      );
-
-      const emailBody = [
-        `Name: ${name}`,
-        `Email: ${email}`,
-        `Phone: ${phone}`,
+      const message = [
+        `Name: ${form.get("name")}`,
+        `Email: ${form.get("email")}`,
+        `Phone: ${
+          form.get("phone") ||
+          "Not provided"
+        }`,
         "",
-        message,
+        form.get("message")
       ].join("\n");
 
       window.location.href =
-        `mailto:susantagorai@gmail.com?subject=${subject}&body=${encodeURIComponent(
-          emailBody
-        )}`;
+        `mailto:susantagorai@gmail.com?subject=${subject}&body=${encodeURIComponent(message)}`;
     }
   );
 }
